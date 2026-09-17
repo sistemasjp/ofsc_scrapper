@@ -1,0 +1,38 @@
+{
+  "base_url": "https://claro-ec.fs.ocs.oraclecloud.com/",
+
+  "_comentario_crews": "Códigos de cuadrilla EXACTOS tal como aparecen en el árbol izquierdo de la Consola de despacho. Agrega/quita según tu operación.",
+  "crews": [
+    "JPC-G009GPON",
+    "JPC-G015GPON",
+    "JPC-G020GPON",
+    "JPC-G026GPON",
+    "JPC-G027GPON",
+    "JPC-G028GPON",
+    "JPC-G031GPON",
+    "JPC-G032GPON",
+    "JPC-G034GPON",
+    "JPC-G035GPON",
+    "JPC-G506GPON",
+    "JPC-G507GPON",
+    "JPC-G502GPON",
+    "JPC-G505GPON"
+  ],
+
+  "_comentario_skip": "Tipos de actividad administrativos que NUNCA consumen material - no se abren ni se registran en el Excel (solo se imprimen en consola).",
+  "skip_activity_types": [
+    "Almuerzo",
+    "Bodega Inicio Día",
+    "Bodega Fin Día",
+    "BLOQUEO DE FRANJA"
+  ],
+
+  "_comentario_estados": "Solo se abre el detalle/inventario de actividades con estos estados (las demás -cancelada/suspendida/no realizado- no se abren ni se registran en el Excel, ahorra tiempo).",
+  "estados_con_posible_consumo": ["finalizada"],
+
+  "output_file": "consumo_materiales.xlsx",
+  "screenshot_on_error": true,
+  "headless": false,
+  "slow_mo_ms": 50,
+  "nav_timeout_ms": 30000
+}

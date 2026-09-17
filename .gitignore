@@ -1,0 +1,17 @@
+# Credenciales - nunca compartir ni subir a control de versiones
+.env
+.env.*
+!.env.example
+
+# Entorno virtual de Python
+venv/
+
+# Salidas generadas por el scraper (pueden traer datos de clientes)
+*.xlsx
+data/
+error_*.png
+.~lock.*#
+
+# Python
+__pycache__/
+*.pyc
