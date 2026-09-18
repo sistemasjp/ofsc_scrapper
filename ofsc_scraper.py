@@ -175,6 +175,33 @@ async def do_login(page, base_url: str, auto_login: bool):
     username = os.environ.get("OFSC_USERNAME") or input("Usuario OFSC: ").strip()
     password = os.environ.get("OFSC_PASSWORD") or getpass.getpass("Clave OFSC: ")
 
+    await _submit_login_form(page, username, password)
+    await page.wait_for_load_state("networkidle", timeout=30000)
+
+    # OFSC puede rechazar el login con un aviso de "se ha superado el número
+    # máximo de sesiones" en vez de dejarnos entrar: las corridas headless de
+    # este script nunca hacen logout explícito (solo cierran el navegador),
+    # así que van dejando sesiones huérfanas del lado del servidor hasta topar
+    # el límite de la cuenta. Cuando aparece, hay que tildar la casilla para
+    # terminar la sesión más antigua y reenviar el formulario.
+    aviso_limite = page.get_by_text("número máximo de sesiones", exact=False).first
+    try:
+        await aviso_limite.wait_for(state="visible", timeout=5000)
+        limite_alcanzado = True
+    except Exception:
+        limite_alcanzado = False
+
+    if limite_alcanzado:
+        print("Aviso de OFSC: se alcanzó el máximo de sesiones concurrentes de esta cuenta.")
+        print("Terminando la sesión más antigua y reintentando el login...")
+        checkbox = page.get_by_text("Suprimir la sesión y conexión de usuario más antiguas", exact=False).first
+        if await checkbox.count():
+            await checkbox.click()
+        await _submit_login_form(page, username, password)
+        await page.wait_for_load_state("networkidle", timeout=30000)
+
+
+async def _submit_login_form(page, username: str, password: str):
     user_field = await _first_visible(page, LOGIN_USER_SELECTORS)
     pass_field = await _first_visible(page, LOGIN_PASS_SELECTORS)
     if not user_field or not pass_field:
@@ -191,8 +218,6 @@ async def do_login(page, base_url: str, auto_login: bool):
         await submit.click()
     else:
         await pass_field.press("Enter")
-
-    await page.wait_for_load_state("networkidle", timeout=30000)
 
 
 async def _first_visible(page, selectors, timeout_ms=4000):
@@ -276,8 +301,13 @@ async def ensure_list_view(page):
     div.oj-datagrid-cell con el ID de actividad, etc.), así que la forzamos
     explícitamente antes de tocar el árbol de cuadrillas."""
     btn = page.locator('button[aria-label="Vista de lista"]').first
-    if await btn.count() == 0:
-        return
+    try:
+        # count()==0 aquí sería un chequeo instantáneo: en frío/headless el botón
+        # puede tardar en existir aunque la red ya esté quieta (Knockout todavía
+        # pintando), así que esperamos activamente en vez de rendirnos de una.
+        await btn.wait_for(state="visible", timeout=20000)
+    except Exception:
+        return  # esta UI no tiene selector de vista (versión distinta); no hay nada que forzar
     try:
         classes = await btn.get_attribute("class") or ""
         if "radio-selected" in classes:
@@ -300,7 +330,10 @@ async def set_date(page, target_date: str):
     date_btn = wrapper.locator("button.toolbar-date-picker-button").first
     prev_btn = wrapper.locator('button[aria-label="Anterior"]').first
     next_btn = wrapper.locator('button[aria-label="Siguiente"]').first
-    await date_btn.wait_for(state="visible", timeout=15000)
+    # En frío/headless el toolbar completo puede tardar bastante más de 15s en
+    # pintarse (mismo patrón visto en el resto del script: la red se calla
+    # antes de que Knockout termine de renderizar).
+    await date_btn.wait_for(state="visible", timeout=30000)
 
     for _ in range(60):  # tope de seguridad: no más de ~2 meses de diferencia
         # El contenedor puede volverse "visible" antes de que Knockout rellene
@@ -708,10 +741,51 @@ async def run(args):
         page.on("response", inventory_cache.listener)
 
         await do_login(page, cfg["base_url"], args.auto_login)
-        await go_to_console(page)
-        await page.wait_for_timeout(1000)
-        await ensure_list_view(page)
-        await set_date(page, args.date)
+
+        # Preparar la Consola (vista de lista + fecha) puede fallar por lentitud
+        # o inestabilidad puntual del servidor de OFSC (no depende de qué fecha
+        # se pida: esto corre ANTES de navegar a ninguna fecha en particular,
+        # la consola todavía muestra "hoy"). Se reintenta una vez recargando
+        # antes de darse por vencido, en vez de solo subir timeouts a ciegas.
+        ultimo_error = None
+        for intento in range(2):
+            try:
+                await go_to_console(page)
+                await page.wait_for_timeout(1000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=20000)
+                except PWTimeout:
+                    pass
+                await ensure_list_view(page)
+                await set_date(page, args.date)
+                ultimo_error = None
+                break
+            except Exception as e:
+                ultimo_error = e
+                if intento == 0:
+                    print(f"  ! Falló preparar la consola para la fecha {args.date} (intento 1/2): {e}")
+                    print("    Recargando la página y reintentando...")
+                    try:
+                        await page.reload(wait_until="domcontentloaded")
+                        await page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+
+        if ultimo_error is not None:
+            print(f"  ! Error preparando la consola para la fecha {args.date} tras 2 intentos: {ultimo_error}")
+            try:
+                print(f"    URL en el momento del error: {page.url}")
+                print(f"    Título de la página: {await page.title()}")
+            except Exception:
+                pass
+            if cfg.get("screenshot_on_error"):
+                try:
+                    shot = SCRIPT_DIR / f"error_inicio_{args.date}.png"
+                    await page.screenshot(path=str(shot))
+                    print(f"    Captura guardada en {shot}")
+                except Exception:
+                    pass
+            raise ultimo_error
         await expand_crew_tree(page)
 
         for crew in cfg["crews"]:
